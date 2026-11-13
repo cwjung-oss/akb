@@ -100,9 +100,10 @@ async def test_a_failure_after_the_first_document_is_completed_by_a_retry(monkey
     """Once the delete has removed its first document, another transaction
     holds the Vault's event lock past the deadline. The second document's
     delete rolls back with its event and the request fails with a
-    `write_busy` that says it partly completed; the first stays deleted, with
-    its event. Run again after the lock is free, the delete removes the second
-    document and the collection."""
+    `write_busy` that says it partly completed, with the document it deleted,
+    over MCP as over REST; the first stays deleted, with its event. Run again
+    after the lock is free, the delete removes the second document and the
+    collection."""
     async with _fresh_database() as pool:
         vault = "native-converge-busy"
         vault_id = await _native_vault(pool, monkeypatch, vault)
@@ -128,6 +129,7 @@ async def test_a_failure_after_the_first_document_is_completed_by_a_retry(monkey
                     await asyncio.wait_for(
                         CollectionService(git=object()).delete(
                             vault=vault, path="notes", recursive=True, agent_id="tester",
+                            disclose_paths=True,
                         ),
                         timeout=_EVENT_LOCK_WAIT_SECONDS * 3,
                     )
@@ -138,9 +140,15 @@ async def test_a_failure_after_the_first_document_is_completed_by_a_retry(monkey
 
         assert failure.value.partially_applied
         assert isinstance(failure.value.__cause__, asyncpg.LockNotAvailableError)
+        progress = {
+            "retry_after_secs": 1, "partially_applied": True, "deleted_docs": 1,
+            "deleted_uris": [doc_uri(vault, "notes/a.md")],
+        }
+        assert failure.value.details == progress
         envelope = exception_envelope(failure.value)
-        assert (envelope["code"], envelope["details"]["partially_applied"]) == (WRITE_BUSY, True)
+        assert (envelope["code"], envelope["details"]) == (WRITE_BUSY, progress)
         assert "Part of the operation may have completed" in envelope["hint"]
+        assert "committed deletions for" in envelope["hint"]
         assert waited >= _EVENT_LOCK_WAIT_SECONDS - 0.5
         assert await _state(pool, vault_id) == {
             "documents": [("notes/a.md", "deleted"), ("notes/b.md", "live")],

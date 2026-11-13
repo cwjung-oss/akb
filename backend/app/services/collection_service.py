@@ -530,7 +530,13 @@ class CollectionService:
                 waited = (
                     settings.vault_write_queue_timeout_secs if isinstance(exc, WriteBusyError) else 5.0
                 )
-                raise WriteBusyError(vault, waited, retry_after_secs=1, partially_applied=True) from exc
+                progress, opening = committed_deletions(
+                    vault=vault, deleted=native_deleted, disclose_paths=disclose_paths,
+                )
+                raise WriteBusyError(
+                    vault, waited, retry_after_secs=1, partially_applied=True,
+                    progress=progress, progress_hint=opening,
+                ) from exc
             raise
         raise _documents_kept_arriving(
             vault=vault, prefix=norm, deleted=native_deleted, disclose_paths=disclose_paths,
